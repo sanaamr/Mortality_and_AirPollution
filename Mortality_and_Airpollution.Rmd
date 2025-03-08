@@ -1,0 +1,230 @@
+---
+title: "MortalityandAirpollution"
+author: "Sana Amiri"
+date: "2023-12-05"
+output: html_document
+---
+Dataset included in pollution.RData refers to a study about the relationship between mortality in 60 US areas and air pollution.
+
+In the following code, I answer the questions regarding the Pollution data set:
+
+**First Question:**  
+Consider the dataset composed of mortality, precipitation, humidity, HC, NOX, and SO2. Construct the most appropriate model for the analysis. Which variables are associated with the mortality rate?
+
+**Second Question:**  
+Consider all the variables in the dataset. Construct the most appropriate model for the analysis. Which variables are associated with the mortality rate?
+
+
+## The initial DataSet
+```{r}
+load('pollution_dataset.RData')
+dim(pollution)
+```
+I want to examine the effect of precipitation, humidity, HC, NOX, SO2 on mortality so I create a new data set.
+
+```{r}
+my.data <- pollution[,c('mortality','HC', 'NOX', 'SO2', 'precipitation',
+ 'humidity')]
+ dim(my.data)
+```
+I start with some graphical analyses, working on the response variable(mortality), to check the normality of its distribution.
+```{r}
+ par(mfrow=c(1,2))
+ hist(my.data$mortality, prob=TRUE, main='mortality')
+ boxplot(my.data$mortality, main='mortality')
+```
+I can see that the normality of the distribution is met, the graph is almost symmetrical and bell shaped.
+
+Now its time to draw Some graphs to evaluate relationship between variables. Just to get some general ideas.
+```{r}
+pairs(my.data[,c(1,2,5,6)])
+```
+I want to check the relationship between mortality and other variables so I check first row or first column (because the plot is symmetrical). Also it is good to check the relationships between covariates too because in some cases some covariates can be highly correlated and this large correlation can mask the true relationships between the covariates and response variable. 
+
+Graphs of interaction between factors and quantitative variables:
+```{r}
+ par(mfrow=c(1,2))
+ boxplot(my.data$mortality~my.data$NOX, main='mortality vs NOX')
+ boxplot(my.data$mortality~my.data$SO2, main='mortality vs SO2')
+```
+```{r}
+ par(mfrow=c(1,2))
+ boxplot(my.data$precipitation~my.data$NOX, main='precipitation vs NOX')
+ boxplot(my.data$precipitation~my.data$SO2, main='precipitation vs SO2')
+```
+```{r}
+par(mfrow=c(1,2))
+ boxplot(my.data$humidity~my.data$NOX, main='humidity vs NOX')
+ boxplot(my.data$humidity~my.data$SO2, main='humidity vs SO2')
+```
+It seems some interesting relationships can be inserted in the model.
+
+I start with building a linear regression model with interactions between covariats.
+```{r}
+ m<-lm(mortality ~HC*NOX+ HC*SO2+ NOX*SO2+
+ precipitation*NOX +humidity*NOX+precipitation*SO2+
+ humidity*SO2, data=my.data)
+summary(m)
+
+```
+Several interaction terms, have high p-values, indicating they are not contributing much to the model.I start the variable selection process by removing the interactions with highest p-value in each step. 
+
+```{r}
+ m2<-lm(mortality ~HC*NOX+ NOX*SO2 +precipitation*NOX +
+ humidity*NOX +humidity*SO2,data=my.data)
+summary(m2)
+```
+```{r}
+ m3 <- lm(mortality ~ HC*NOX + NOX*SO2+precipitation*NOX +
+ humidity*SO2, data=my.data)
+summary(m3)
+```
+```{r}
+ m4 <- lm(mortality ~ HC*NOX + precipitation*NOX +
+ humidity*SO2, data=my.data)
+summary(m4)
+```
+```{r}
+ m5<-lm(mortality ~ HC*NOX +precipitation*NOX +humidity+SO2, data=my.data)
+ summary(m5)
+```
+```{r}
+ m6 <- lm(mortality ~ HC*NOX + precipitation + humidity +SO2, data=my.data)
+ summary(m6)
+```
+```{r}
+ m7 <- lm(mortality ~ HC*NOX + precipitation+SO2, data=my.data)
+ summary(m7)
+```
+At this stage I reached a good model that balances simplicity and explanatory power.The remaining predictors and interaction terms are statistically significant, contributing meaningfully to the model, so I can not remove any of them.
+Further simplification may lead to loss of important information, so this will be the final model used for analysis.
+Additionally, the adjusted R-squared and F-statistic indicate that the model explains a substantial portion of the variance in the response variable.
+
+Checking the real advantages of using model m7 instead of first model:
+```{r}
+ anova(m7,m)
+```
+ One main instrument to evaluate the model accuracy is graphical evaluation. Here we have residual analysis of model m7
+```{r}
+par(mfrow=c(2,2))
+ plot(m7)
+```
+The graphical analysis seems satisfactory: there are no anomalous values,neither trend in residuals or deviations from normality. 
+We can check the need for a polynomial associated to precipitation.
+```{r}
+ m8<-update(m7, .~.+ I(precipitation^2))
+ summary(m8)
+```
+It seems the polynomial is not useful.
+ Model m7 suggests that
+ • the mortality rate increases with precipitation
+ • the mortality rate increases with SO2
+ • for a small level of NOX, the mortality rate increases with HC,and viceversa.
+ 
+SECOND QUESTION:
+Given the large number of covariates, we can use regularization techniques. And we can exploits some of the previous findings, as, for example, we can insert in the analysis the interaction between HC and NOX. We can use lasso for variable selection.
+```{r}
+ library(glmnet)
+  m.glm <- glm(mortality ~ .+HC:NOX, data=pollution)
+ X <- model.matrix(m.glm)[,-1]
+ m.lasso <- glmnet(x=X, y=pollution$mortality, alpha=1)
+```
+```{r}
+ plot(m.lasso, xvar='lambda')
+```
+```{r}
+ set.seed(222)
+ m.lasso.cv <- cv.glmnet(x=X, y=pollution$mortality, alpha=1)
+ m.lasso.cv
+```
+There 15 covariants using lambda min, and 14 covariat lambda with 1 standard error. So there is no relevant selection.
+Now I compare the results with linear model.
+```{r}
+m.glm<-glm(mortality ~.+HC:NOX,data=pollution)
+ library(boot)
+ set.seed(222)
+ m.glm.cv <-cv.glm(pollution,m.glm)
+ m.glm.cv$delta
+```
+Lasso is preferable in terms of mean squared error. But since there is no substantial variable selection, it does not seem to be so interesting. 
+Now I  try an automatic variable selection, using a forward procedure, adding the interactions suggested by the model of the first question.
+```{r}
+ install.packages("leaps")
+```
+```{r}
+  library(leaps)
+ m.forward<-regsubsets(mortality~. +HC:NOX,data=pollution,nvmax=19,
+ method='forward')
+ summary(m.forward)
+```
+RSS criterion
+```{r}
+ summary(m.forward)$rss
+```
+```{r}
+ which.min(summary(m.forward)$rss)
+```
+```{r}
+coef(m.forward, 15)
+```
+ Adjusted R2 criterion
+```{r}
+ which.max(summary(m.forward)$adjr2)
+```
+```{r}
+coef(m.forward, 12)
+```
+```{r}
+which.min(summary(m.forward)$bic)
+```
+```{r}
+ coef(m.forward, 8)
+```
+ Selection based on BIC suggests an association between mortality with precipitation,poor, SO2. Selection based on adjusted R2 also adds density, HC and NOX.
+Model ranking
+```{r}
+par(mfrow=c(2,2))
+ ## R2
+ plot(summary(m.forward)$rsq, xlab='Number of variables', ylab='R2', type='l')
+ ## add the indication of the preferable model
+ points(which.max(summary(m.forward)$rsq),
+ summary(m.forward)$rsq[which.max(summary(m.forward)$rsq)], col='red', pch=16)
+ ## RSS
+ plot(summary(m.forward)$rss, xlab='Number of variables', ylab='RSS', type='l' )
+ points(which.min(summary(m.forward)$rss),
+ summary(m.forward)$rss[which.min(summary(m.forward)$rss)],col='red',pch=16)
+ ##adjustedR2
+ plot(summary(m.forward)$adjr2,xlab='Numberof variables',
+ ylab='AdjustedR2',type='l')
+ points(which.max(summary(m.forward)$adjr2),
+ summary(m.forward)$adjr2[which.max(summary(m.forward)$adjr2)],
+ col='red',pch=16)
+ ##BIC
+ plot(summary(m.forward)$bic,xlab='Numberof variables',ylab='BIC',type='l')
+ points(which.min(summary(m.forward)$bic),
+ summary(m.forward)$bic[which.min(summary(m.forward)$bic)],col='red',pch=16)
+```
+ Evaluate the regression model chosen by BIC.
+```{r}
+ m.bic<-lm(mortality ~precipitation +Jan.temp+July.temp+
+ over65+education+density+poor+SO2,data=pollution)
+ summary(m.bic)
+```
+Check residuals
+```{r}
+ par(mfrow=c(2,2))
+ plot(m.bic)
+```
+I like the residuals.
+
+Here’s a summary of the key findings from the BIC-selected model:
+ • The mortality rate increases with precipitation.
+ • The mortality rate decreases with higher January and July temperatures.
+ • A higher percentage of elderly individuals (over 65) is associated with an increase in mortality.
+ • Higher population density is linked to increased mortality.
+ • The percentage of poor individuals in the population is positively associated with mortality.
+ • SO₂ levels show a slight positive association with mortality but are not strongly significant.
+ 
+
+
+
